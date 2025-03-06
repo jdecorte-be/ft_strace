@@ -1,0 +1,32 @@
+NAME = ft_strace
+
+CC = gcc
+
+RM = rm -rf
+
+SRCS = $(wildcard src/*.c) $(wildcard src/32/*.c) $(wildcard src/64/*.c)
+OBJS = $(SRCS:.c=.o)
+LIBS = libft/libft.a
+
+$(NAME): $(OBJS) $(LIBS)
+	$(CC) $(OBJS) $(LIBS) -o $(NAME)
+
+all: $(NAME)
+
+$(LIBS):
+	make all -C libft
+
+%.o: %.c
+	$(CC) -c $< -o $@
+
+clean:
+	$(RM) $(OBJS)
+	make clean -C libft
+
+fclean: clean
+	$(RM) $(NAME)
+	make fclean -C libft
+
+re: fclean all
+
+.PHONY: clean fclean re all
