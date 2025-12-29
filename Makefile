@@ -1,32 +1,41 @@
 NAME = ft_strace
 
 CC = gcc
-
+CFLAGS = -I includes
 RM = rm -rf
 
-SRCS = $(wildcard src/*.c) $(wildcard src/32/*.c) $(wildcard src/64/*.c)
-OBJS = $(SRCS:.c=.o)
-LIBS = libft/libft.a
+SRCS_DIR = srcs
+SRCS = $(wildcard $(SRCS_DIR)/*.c)
 
-$(NAME): $(OBJS) $(LIBS)
-	$(CC) $(OBJS) $(LIBS) -o $(NAME)
+OBJS_DIR = objs
+OBJS = $(SRCS:$(SRCS_DIR)/%.c=$(OBJS_DIR)/%.o)
+
+GREEN = \033[0;32m
+RED = \033[0;31m
+RESET = \033[0m
 
 all: $(NAME)
 
-$(LIBS):
-	make all -C libft
+$(OBJS_DIR):
+	@mkdir -p $(OBJS_DIR)
 
-%.o: %.c
-	$(CC) -c $< -o $@
+$(OBJS_DIR)/%.o: $(SRCS_DIR)/%.c | $(OBJS_DIR)
+	@printf "$(GREEN)Compiling:$(RESET) $<\n"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(NAME): $(OBJS)
+	@printf "$(GREEN)Linking:$(RESET) $(NAME)\n"
+	@$(CC) $(CFLAGS) $(OBJS) -o $(NAME) -lm
+	@printf "$(GREEN)Build complete!$(RESET)\n"
 
 clean:
-	$(RM) $(OBJS)
-	make clean -C libft
+	@printf "$(RED)Cleaning objects...$(RESET)\n"
+	@$(RM) $(OBJS_DIR)
 
 fclean: clean
-	$(RM) $(NAME)
-	make fclean -C libft
+	@printf "$(RED)Cleaning executable...$(RESET)\n"
+	@$(RM) $(NAME)
 
 re: fclean all
 
-.PHONY: clean fclean re all
+.PHONY: all clean fclean re
