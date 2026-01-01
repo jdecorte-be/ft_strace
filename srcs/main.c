@@ -46,9 +46,9 @@ int main(int ac, char **av)
 
 
 
-    pid_t pid = fork();
-    if(pid == 0)
+    strace.child = fork();
+    if(strace.child == 0)
         return exec_bin(ac, av);
     else
-        return trace_bin();
+        return trace_bin(&strace);
 }

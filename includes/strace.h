@@ -25,6 +25,8 @@ typedef struct s_strace
 {
     struct arguments args;
 
+    pid_t child;
+
     
 }   t_strace;
 

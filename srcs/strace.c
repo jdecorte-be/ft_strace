@@ -15,30 +15,34 @@ int exec_bin(int ac, char **av)
     return execvp(av[0], av);
 }
 
-int trace_bin()
+int trace_bin(t_strace *strace)
 {
     int status;
-    pid_t child = wait(&status);
-    if (child == -1)
-    {
-        perror("wait");
-        return -1;
-    }
-    printf("Tracing the target binary...\n");
-
+    int is_entry = 1;
     struct user_regs_struct regs;
-    if (ptrace(PTRACE_GETREGS, child, NULL, &regs) == -1)
-    {
-        perror("ptrace(GETREGS)");
-        return -1;
+
+    waitpid(strace->child, &status, 0);
+
+    ptrace(PTRACE_SETOPTIONS, strace->child, 0, PTRACE_O_TRACESYSGOOD);
+
+    while (1) {
+        if (ptrace(PTRACE_SYSCALL, strace->child, 0, 0) == -1) break;
+        waitpid(strace->child, &status, 0);
+
+        if (WIFEXITED(status)) break;
+
+        if (ptrace(PTRACE_GETREGS, strace->child, 0, &regs) == -1) break;
+
+        if (is_entry) {
+            printf("SYSCALL %llu(%llu, %llu, %llu) ", 
+                   regs.orig_rax, regs.rdi, regs.rsi, regs.rdx);
+            is_entry = 0;
+        } else {
+            printf("= %lld\n", (long long)regs.rax);
+            is_entry = 1;
+        }
     }
-
-    unsigned long orig = regs.orig_rax;
-
-    printf("Original syscall number: %lu\n", orig);
-
-    ptrace(PTRACE_CONT, child, NULL, NULL);
-    return 0;
+    printf("+++ exited with status %d +++\n", WEXITSTATUS(status));
 }
 
 
