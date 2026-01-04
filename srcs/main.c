@@ -22,6 +22,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
         return 0;
     case ARGP_KEY_NO_ARGS:
         argp_error(state, "must have PROG [ARGS]");
+        break;
     default:
         return ARGP_ERR_UNKNOWN;
     }
@@ -30,7 +31,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 
 static struct argp argp = {options, parse_opt, args_doc, doc};
 
-int main(int ac, char **av)
+int main(int ac, char **av, char **env)
 {
     t_strace strace = {
         .args = {.target=NULL,.sum_opt=0}
@@ -43,12 +44,17 @@ int main(int ac, char **av)
     av += index;
 
     strace.args.target = av;
+    while (env[strace.n_env])
+        strace.n_env++;
 
+    strace.pid = fork();
+    if(strace.pid == 0)
+    {
+        raise(SIGSTOP);
+        execve(av[0], av, env);
+        fprintf(stderr, "%s: execve: %s\n", av[0], strerror(errno));
+        exit(EXIT_FAILURE);
+    }
 
-
-    strace.child = fork();
-    if(strace.child == 0)
-        return exec_bin(ac, av);
-    else
-        return trace_bin(&strace);
+    return trace_bin(&strace);
 }

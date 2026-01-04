@@ -1,7 +1,7 @@
 NAME = ft_strace
 
 CC = gcc
-CFLAGS = -I includes
+CFLAGS = -I includes -fno-builtin
 RM = rm -rf
 
 SRCS_DIR = srcs
