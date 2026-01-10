@@ -1,5 +1,11 @@
 #include "strace.h"
 
+/**
+ * @brief Search for a command executable in the PATH directories
+ *
+ * @param cmd
+ * @return char*
+ */
 static char *find_in_path(const char *cmd)
 {
     char *path_env = getenv("PATH");
