@@ -51,9 +51,7 @@ int main(int ac, char **av, char **env)
     if(strace.pid == 0)
     {
         raise(SIGSTOP);
-        execve(av[0], av, env);
-        fprintf(stderr, "%s: execve: %s\n", av[0], strerror(errno));
-        exit(EXIT_FAILURE);
+        exec_with_path(av, env);
     }
 
     return trace_bin(&strace);

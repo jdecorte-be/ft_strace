@@ -146,7 +146,7 @@ int trace_bin(t_strace *strace)
         }
     }
 
-    if (is_entry && is_print)
+    if (!is_entry && is_print)
         fprintf(stderr, " = ?\n");
 
 	if (WIFSIGNALED(status))

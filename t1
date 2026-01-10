@@ -1,0 +1,41 @@
+execve("test/test_1", ["test/test_1"], 0x7ffefade3c00 /* 82 vars */) = 0
+brk(NULL) = 0x5a53b0ed9000
+arch_prctl(0x3001, 0x7fff35ad1c20) = 0xffffffffffffffea
+mmap(NULL, 8192, 0x3, 0x22, -1, NULL) = 0x7d5935081000
+access("/etc/ld.so.preload", 4) = -2
+openat(-100, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC, 0) = 3
+newfstatat(0x3, 0x7d59350b1ee9, 0x7fff35ad0d70, 0x1000) = 0
+mmap(NULL, 98288, 0x1, 0x2, 3, NULL) = 0x7d5935069000
+close(3) = 0
+openat(-100, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC, 0) = 3
+read(3, 0x7fff35ad0fa8, 832) = 832
+pread64(3, 0x7fff35ad0bb0, 784, 0x40) = 0x310
+pread64(3, 0x7fff35ad0b70, 48, 0x350) = 0x30
+pread64(3, 0x7fff35ad0b20, 68, 0x380) = 0x44
+newfstatat(0x3, 0x7d59350b1ee9, 0x7fff35ad0e40, 0x1000) = 0
+pread64(3, 0x7fff35ad0a80, 784, 0x40) = 0x310
+mmap(NULL, 2264656, 0x1, 0x802, 3, NULL) = 0x7d5934e00000
+mprotect(0x7d5934e28000, 2023424, 0) = 0
+mmap(0x7d5934e28000, 1658880, 0x5, 0x812, 3, 0x28000) = 0x7d5934e28000
+mmap(0x7d5934fbd000, 360448, 0x1, 0x812, 3, 0x1bd000) = 0x7d5934fbd000
+mmap(0x7d5935016000, 24576, 0x3, 0x812, 3, 0x215000) = 0x7d5935016000
+mmap(0x7d593501c000, 52816, 0x3, 0x32, -1, NULL) = 0x7d593501c000
+close(3) = 0
+mmap(NULL, 12288, 0x3, 0x22, -1, NULL) = 0x7d5935066000
+arch_prctl(0x1002, 0x7d5935066740) = 0
+set_tid_address(0x7d5935066a10) = 0x16a39
+set_robust_list(0x7d5935066a20, 0x18) = 0
+rseq(0x7d59350670e0, 0x20, 0, 0x53053053) = 0
+mprotect(0x7d5935016000, 16384, 1) = 0
+mprotect(0x5a537395c000, 4096, 1) = 0
+mprotect(0x7d59350bb000, 8192, 1) = 0
+prlimit64(0, 0x3, 0, 0x7fff35ad1980) = 0
+munmap(0x7d5935069000, 98288) = 0
+clone(0x1200011, NULL, 0, 889612816, NULL) = 92730
+wait4(-1, child
+NULL, 0, 0) = 92730
+ = 92730
+write(1, "parent\n", 7)parent
+ = 7
+exit_group(0) = ?
++++ exited with 0 +++
