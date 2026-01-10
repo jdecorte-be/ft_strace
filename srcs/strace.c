@@ -1,10 +1,25 @@
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <linux/ptrace.h> // For PTRACE_O_TRACESYSGOOD
+
 #include "strace.h"
 #include "syscalls.h"
 
+/* Global tables */
 const syscall_t			x86_64_syscall[] = X86_64_SYSCALL;
 const syscall_t			i386_syscall[] = I386_SYSCALL;
 extern const char		*sys_signame[];
 
+/* Helper: Detect Architecture */
 t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
 {
     if (regs->cs == 0x33)
@@ -15,14 +30,12 @@ t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
         return ARCH_UNKNOWN;
 }
 
-void		block_signals(pid_t pid)
+/* Helper: Block signals in the tracer so Ctrl+C doesn't kill us immediately */
+void block_signals(void)
 {
-	int				status;
-	sigset_t		set;
+	sigset_t set;
 
 	sigemptyset(&set);
-	sigprocmask(SIG_SETMASK, &set, NULL);
-	waitpid(pid, &status, 0);
 	sigaddset(&set, SIGHUP);
 	sigaddset(&set, SIGINT);
 	sigaddset(&set, SIGQUIT);
@@ -31,131 +44,205 @@ void		block_signals(pid_t pid)
 	sigprocmask(SIG_BLOCK, &set, NULL);
 }
 
-/*** Handler for x86_64 and i386 ***/
-
-int handle_syscall_x86_64(t_strace *strace, struct user_regs_struct *regs, _Bool is_entry)
+/* 
+** Generalized Syscall Handler 
+** Handles both x86_64 and i386, argument masking, and error printing.
+*/
+void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch arch, _Bool is_entry)
 {
+    const syscall_t *table;
     unsigned long syscall_num = regs->orig_rax;
-
-    if (regs->rax == -ENOSYS && regs->orig_rax < MAX_X86_64_SYSCALL)
+    unsigned long max_syscall;
+    unsigned long args[6];
+    
+    // 1. Setup Architecture Specifics
+    if (arch == ARCH_X86_64)
     {
-        print_syscall(strace, x86_64_syscall[syscall_num], x86_64_syscall[syscall_num].argc,
-            regs->rdi, regs->rsi, regs->rdx, regs->r10, regs->r8, regs->r9);
+        table = x86_64_syscall;
+        max_syscall = MAX_X86_64_SYSCALL;
+        
+        // System V AMD64 ABI
+        args[0] = regs->rdi; args[1] = regs->rsi; args[2] = regs->rdx;
+        args[3] = regs->r10; args[4] = regs->r8;  args[5] = regs->r9;
+    }
+    else if (arch == ARCH_I386)
+    {
+        table = i386_syscall;
+        max_syscall = MAX_I386_SYSCALL;
+        
+        // i386 ABI (passed in registers). 
+        // Cast to uint32_t to mask upper bits.
+        args[0] = (uint32_t)regs->rbx; args[1] = (uint32_t)regs->rcx; args[2] = (uint32_t)regs->rdx;
+        args[3] = (uint32_t)regs->rsi; args[4] = (uint32_t)regs->rdi; args[5] = (uint32_t)regs->rbp;
     }
     else
     {
-        if(x86_64_syscall[syscall_num].type_ret == INT)
-            fprintf(stderr, " = %d\n", regs->rax);
-        else
-            fprintf(stderr, " = %#lx\n", regs->rax);
+        return; // Unknown architecture
     }
-    return 0; 
-}
 
-int handle_syscall_i386(t_strace *strace, struct user_regs_struct *regs, _Bool is_entry)
-{
-    unsigned long syscall_num = regs->orig_rax;
+    if (syscall_num >= max_syscall)
+        return; // Safety check
 
-    if (regs->rax == -ENOSYS && syscall_num < MAX_I386_SYSCALL)
+    // 2. Print Logic
+    if (is_entry)
     {
-        print_syscall(strace, i386_syscall[syscall_num], i386_syscall[syscall_num].argc,
-            regs->rbx, regs->rcx, regs->rdx, regs->rsi, regs->rdi, regs->rbp);
+        // --- SYSCALL ENTRY ---
+        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
+                      args[0], args[1], args[2], args[3], args[4], args[5]);
     }
     else
     {
-        if (i386_syscall[syscall_num].type_ret == INT)
-            fprintf(stderr, " = %d\n", (int)regs->rax);
+        // --- SYSCALL EXIT ---
+        long long ret = (long long)regs->rax;
+
+        // Check for Errors: Linux kernel errors are -1 to -4095
+        if (ret > -4096 && ret < 0)
+        {
+            // Print error (e.g. " = -1 EBADF (Bad file descriptor)")
+            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
+        }
         else
-            fprintf(stderr, " = %#x\n", (unsigned int)regs->rax);
+        {
+            // Print Success
+            if (table[syscall_num].type_ret == INT)
+            {
+                if (arch == ARCH_I386)
+                    fprintf(stderr, " = %d\n", (int)regs->rax);
+                else
+                    fprintf(stderr, " = %d\n", (int)regs->rax);
+            }
+            else
+            {
+                // Print Pointers / Hex
+                if (arch == ARCH_I386)
+                    fprintf(stderr, " = %#x\n", (unsigned int)regs->rax);
+                else
+                    fprintf(stderr, " = %#lx\n", regs->rax);
+            }
+        }
     }
-    return 0;
 }
 
-
-
+/*
+** Main Loop
+*/
 int trace_bin(t_strace *strace)
 {
-    siginfo_t si;
     int status;
+    int sig = 0; // Signal to inject back into child
     struct user_regs_struct regs;
     struct iovec iov;
+    siginfo_t si;
     t_sys_arch sys_arch;
 
-    _Bool is_entry = 0;
-    _Bool is_print = 0;
-    
+    _Bool is_entry = 1; // 1 = Entering syscall, 0 = Exiting
+    _Bool is_print = 0; // 0 = Waiting for execve, 1 = Printing enabled
+
+    // 1. Seize the process
     if (ptrace(PTRACE_SEIZE, strace->pid, 0, 0) == -1)
         error(EXIT_FAILURE, 0, "ptrace seize failed");
+    
+    // 2. Interrupt to apply options
     if (ptrace(PTRACE_INTERRUPT, strace->pid, 0, 0) == -1)
         error(EXIT_FAILURE, 0, "ptrace interrupt failed");
 
-    block_signals(strace->pid);
+    // 3. Wait for the interrupt to take effect
+    waitpid(strace->pid, &status, 0);
+
+    // 4. Set TRACESYSGOOD to distinguish Syscalls (SIGTRAP|0x80) from Signals
+    ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD);
+
+    // 5. Block signals in this tracer process
+    block_signals();
 
     while (42)
     {
-        if (ptrace(PTRACE_SYSCALL, strace->pid, 0, 0) < 0)
+        // Pass 'sig' (if any) back to child
+        if (ptrace(PTRACE_SYSCALL, strace->pid, 0, sig) < 0)
             break;
+        
         if (waitpid(strace->pid, &status, 0) < 0)
             break;
 
-        /* Check for signals */
-        if (is_entry && !ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si) && si.si_signo != SIGTRAP)
-        {
-            fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
-			print_siginfo(&si);
-			fprintf(stderr, " ---\n");
-        }
+        // Reset injected signal immediately
+        sig = 0;
 
-
-        iov.iov_base = &regs;
-        iov.iov_len = sizeof(regs);
-        if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) == -1)
+        // Check if child exited or was killed
+        if (WIFEXITED(status) || WIFSIGNALED(status))
             break;
 
-        /* Detect architecture */
-        sys_arch = detect_sys_arch(&regs);
-
-        switch (sys_arch)
+        // Check if stopped
+        if (WIFSTOPPED(status))
         {
-            case ARCH_X86_64: // 64-bit architecture
+            // --- CASE 1: SYSCALL STOP ---
+            // (SIGTRAP | 0x80) indicates a syscall because of PTRACE_O_TRACESYSGOOD
+            if (WSTOPSIG(status) == (SIGTRAP | 0x80))
+            {
+                iov.iov_base = &regs;
+                iov.iov_len = sizeof(regs);
+                if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) == -1)
+                    break;
+
+                sys_arch = detect_sys_arch(&regs);
+                
+                // EXECVE FILTERING:
+                // Do not print anything until the first specific execve call
                 if (!is_print)
                 {
-                    if (!is_entry && regs.orig_rax == 59)
+                    unsigned long syscall_nr = regs.orig_rax;
+                    // 59 = execve (x64), 11 = execve (i386)
+                    if ((sys_arch == ARCH_X86_64 && syscall_nr == 59) || 
+                        (sys_arch == ARCH_I386 && syscall_nr == 11))
+                    {
                         is_print = 1;
+                    }
                     else
+                    {
+                        // Skip this stop, but flip state to keep sync
+                        is_entry = !is_entry; 
                         continue;
+                    }
                 }
 
-                handle_syscall_x86_64(strace, &regs, is_entry);
+                handle_syscall(strace, &regs, sys_arch, is_entry);
                 is_entry = !is_entry;
-                break;
-            case ARCH_I386: // 32-bit architecture
-                if (!is_print)
+            }
+            // --- CASE 2: GENUINE SIGNAL ---
+            // (SIGCHLD, SIGINT, SIGSEGV, etc.)
+            else
+            {
+                ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si);
+
+                // Do not print internal SIGTRAP (caused by PTRACE_ATTACH, etc.)
+                if (si.si_signo != SIGTRAP)
                 {
-                    if (!is_entry && regs.orig_rax == 11)
-                        is_print = 1;
-                    else
-                        continue;
+                    if (is_print || si.si_signo != SIGSTOP)
+                    {
+                        fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
+                        print_siginfo(&si);
+                        fprintf(stderr, " ---\n");
+                        
+                        // SAVE THE SIGNAL to pass it back in the next ptrace call
+                        sig = si.si_signo;
+                    }
                 }
-                handle_syscall_x86_64(strace, &regs, is_entry);
-                is_entry = !is_entry;
-                break;
-            default:
-                printf("Unknown architecture\n");
-                return -1;
+            }
         }
     }
 
+    // Handle final exit output
     if (!is_entry && is_print)
         fprintf(stderr, " = ?\n");
 
-	if (WIFSIGNALED(status))
-	{
-		fprintf(stderr, "+++ killed by %s +++\n", sys_signame[WTERMSIG(status)]);
-		kill(getpid(), WTERMSIG(status));
-	}
-	else
-		fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+    if (WIFSIGNALED(status))
+    {
+        fprintf(stderr, "+++ killed by %s +++\n", sys_signame[WTERMSIG(status)]);
+        kill(getpid(), WTERMSIG(status));
+    }
+    else if (WIFEXITED(status))
+    {
+        fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+    }
 
-	return status;
+    return WEXITSTATUS(status);
 }
