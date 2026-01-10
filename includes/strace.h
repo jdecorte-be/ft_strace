@@ -69,6 +69,7 @@ typedef struct	syscall_s {
 
 }				syscall_t;
 
+void print_summary(t_strace *strace);
 void print_syscall(t_strace *strace, syscall_t syscall, int argc, ...);
 int trace_bin(t_strace *strace);
 void print_siginfo(siginfo_t *si);

@@ -31,11 +31,14 @@ t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
 }
 
 /* Helper: Block signals in the tracer so Ctrl+C doesn't kill us immediately */
-void block_signals(void)
+void block_signals(pid_t pid)
 {
-	sigset_t set;
+	int				status;
+	sigset_t		set;
 
 	sigemptyset(&set);
+	sigprocmask(SIG_SETMASK, &set, NULL);
+	waitpid(pid, &status, 0);
 	sigaddset(&set, SIGHUP);
 	sigaddset(&set, SIGINT);
 	sigaddset(&set, SIGQUIT);
@@ -82,6 +85,42 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
 
     if (syscall_num >= max_syscall)
         return; // Safety check
+
+    if (strace->args.sum_opt)
+    {
+        t_stats *stats = (arch == ARCH_X86_64) ? &strace->stats_64[syscall_num] : &strace->stats_32[syscall_num];
+        
+        if (is_entry)
+        {
+            clock_gettime(CLOCK_MONOTONIC, &strace->start_ts);
+            stats->calls++;
+            stats->name = table[syscall_num].name;
+        }
+        else
+        {
+            struct timespec end_ts, diff;
+            clock_gettime(CLOCK_MONOTONIC, &end_ts);
+            
+            diff.tv_sec = end_ts.tv_sec - strace->start_ts.tv_sec;
+            diff.tv_nsec = end_ts.tv_nsec - strace->start_ts.tv_nsec;
+            if (diff.tv_nsec < 0) {
+                diff.tv_sec--;
+                diff.tv_nsec += 1000000000;
+            }
+            
+            stats->total_time.tv_sec += diff.tv_sec;
+            stats->total_time.tv_nsec += diff.tv_nsec;
+            if (stats->total_time.tv_nsec >= 1000000000) {
+                stats->total_time.tv_sec++;
+                stats->total_time.tv_nsec -= 1000000000;
+            }
+
+            long long ret = (long long)regs->rax;
+            if (ret > -4096 && ret < 0)
+                stats->errors++;
+        }
+        return;
+    }
 
     // 2. Print Logic
     if (is_entry)
@@ -146,14 +185,10 @@ int trace_bin(t_strace *strace)
     if (ptrace(PTRACE_INTERRUPT, strace->pid, 0, 0) == -1)
         error(EXIT_FAILURE, 0, "ptrace interrupt failed");
 
-    // 3. Wait for the interrupt to take effect
-    waitpid(strace->pid, &status, 0);
+    block_signals(strace->pid);
 
-    // 4. Set TRACESYSGOOD to distinguish Syscalls (SIGTRAP|0x80) from Signals
     ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD);
 
-    // 5. Block signals in this tracer process
-    block_signals();
 
     while (42)
     {
@@ -218,9 +253,12 @@ int trace_bin(t_strace *strace)
                 {
                     if (is_print || si.si_signo != SIGSTOP)
                     {
-                        fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
-                        print_siginfo(&si);
-                        fprintf(stderr, " ---\n");
+                        if (!strace->args.sum_opt)
+                        {
+                            fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
+                            print_siginfo(&si);
+                            fprintf(stderr, " ---\n");
+                        }
                         
                         // SAVE THE SIGNAL to pass it back in the next ptrace call
                         sig = si.si_signo;
@@ -231,17 +269,22 @@ int trace_bin(t_strace *strace)
     }
 
     // Handle final exit output
-    if (!is_entry && is_print)
+    if (!strace->args.sum_opt && !is_entry && is_print)
         fprintf(stderr, " = ?\n");
+
+    if (strace->args.sum_opt)
+        print_summary(strace);
 
     if (WIFSIGNALED(status))
     {
-        fprintf(stderr, "+++ killed by %s +++\n", sys_signame[WTERMSIG(status)]);
+        if (!strace->args.sum_opt)
+             fprintf(stderr, "+++ killed by %s +++\n", sys_signame[WTERMSIG(status)]);
         kill(getpid(), WTERMSIG(status));
     }
     else if (WIFEXITED(status))
     {
-        fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
+        if (!strace->args.sum_opt)
+             fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(status));
     }
 
     return WEXITSTATUS(status);
