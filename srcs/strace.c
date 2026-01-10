@@ -1,16 +1,3 @@
-#include <sys/ptrace.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/user.h>
-#include <sys/uio.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <linux/ptrace.h> // For PTRACE_O_TRACESYSGOOD
-
 #include "strace.h"
 #include "syscalls.h"
 
@@ -19,7 +6,12 @@ const syscall_t			x86_64_syscall[] = X86_64_SYSCALL;
 const syscall_t			i386_syscall[] = I386_SYSCALL;
 extern const char		*sys_signame[];
 
-/* Helper: Detect Architecture */
+/**
+ * @brief Detect the architecture (x86_64 or i386) based on code segment register
+ *
+ * @param regs
+ * @return t_sys_arch
+ */
 t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
 {
     if (regs->cs == 0x33)
@@ -30,7 +22,24 @@ t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
         return ARCH_UNKNOWN;
 }
 
-/* Helper: Block signals in the tracer so Ctrl+C doesn't kill us immediately */
+/**
+ * @brief Retrieve the current time for syscall duration measurement
+ *
+ * @param pid
+ * @param ts
+ */
+static void get_time(pid_t pid, struct timespec *ts)
+{
+    clockid_t cid;
+    if (clock_getcpuclockid(pid, &cid) != 0 || clock_gettime(cid, ts) != 0)
+        clock_gettime(CLOCK_MONOTONIC, ts);
+}
+
+/**
+ * @brief Block standard termination signals during tracing
+ *
+ * @param pid
+ */
 void block_signals(pid_t pid)
 {
 	int				status;
@@ -47,10 +56,19 @@ void block_signals(pid_t pid)
 	sigprocmask(SIG_BLOCK, &set, NULL);
 }
 
-/* 
-** Generalized Syscall Handler 
-** Handles both x86_64 and i386, argument masking, and error printing.
-*/
+
+/**
+ * @brief Handle system call entry and exit events
+ *
+ * Dispatches logic based on architecture, maps registers to arguments,
+ * updates statistics if summary mode is active, or prints formatted
+ * syscall arguments and return values to stderr.
+ *
+ * @param strace
+ * @param regs
+ * @param arch
+ * @param is_entry
+ */
 void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch arch, _Bool is_entry)
 {
     const syscall_t *table;
@@ -58,13 +76,11 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
     unsigned long max_syscall;
     unsigned long args[6];
     
-    // 1. Setup Architecture Specifics
     if (arch == ARCH_X86_64)
     {
         table = x86_64_syscall;
         max_syscall = MAX_X86_64_SYSCALL;
         
-        // System V AMD64 ABI
         args[0] = regs->rdi; args[1] = regs->rsi; args[2] = regs->rdx;
         args[3] = regs->r10; args[4] = regs->r8;  args[5] = regs->r9;
     }
@@ -73,18 +89,14 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         table = i386_syscall;
         max_syscall = MAX_I386_SYSCALL;
         
-        // i386 ABI (passed in registers). 
-        // Cast to uint32_t to mask upper bits.
         args[0] = (uint32_t)regs->rbx; args[1] = (uint32_t)regs->rcx; args[2] = (uint32_t)regs->rdx;
         args[3] = (uint32_t)regs->rsi; args[4] = (uint32_t)regs->rdi; args[5] = (uint32_t)regs->rbp;
     }
     else
-    {
-        return; // Unknown architecture
-    }
+        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 
     if (syscall_num >= max_syscall)
-        return; // Safety check
+        return; 
 
     if (strace->args.sum_opt)
     {
@@ -92,14 +104,14 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         
         if (is_entry)
         {
-            clock_gettime(CLOCK_MONOTONIC, &strace->start_ts);
+            get_time(strace->pid, &strace->start_ts);
             stats->calls++;
             stats->name = table[syscall_num].name;
         }
         else
         {
             struct timespec end_ts, diff;
-            clock_gettime(CLOCK_MONOTONIC, &end_ts);
+            get_time(strace->pid, &end_ts);
             
             diff.tv_sec = end_ts.tv_sec - strace->start_ts.tv_sec;
             diff.tv_nsec = end_ts.tv_nsec - strace->start_ts.tv_nsec;
@@ -122,7 +134,6 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         return;
     }
 
-    // 2. Print Logic
     if (is_entry)
     {
         // --- SYSCALL ENTRY ---
@@ -134,15 +145,11 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         // --- SYSCALL EXIT ---
         long long ret = (long long)regs->rax;
 
-        // Check for Errors: Linux kernel errors are -1 to -4095
+        // linux kernel errors are -1 to -4095
         if (ret > -4096 && ret < 0)
-        {
-            // Print error (e.g. " = -1 EBADF (Bad file descriptor)")
             fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
-        }
         else
         {
-            // Print Success
             if (table[syscall_num].type_ret == INT)
             {
                 if (arch == ARCH_I386)
@@ -152,7 +159,6 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
             }
             else
             {
-                // Print Pointers / Hex
                 if (arch == ARCH_I386)
                     fprintf(stderr, " = %#x\n", (unsigned int)regs->rax);
                 else
@@ -162,20 +168,24 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
     }
 }
 
-/*
-** Main Loop
-*/
+
+/**
+ * @brief Main tracing loop responsible for attaching and monitoring the process
+ *
+ * @param strace
+ * @return int
+ */
 int trace_bin(t_strace *strace)
 {
     int status;
-    int sig = 0; // Signal to inject back into child
+    int sig = 0;
     struct user_regs_struct regs;
     struct iovec iov;
     siginfo_t si;
     t_sys_arch sys_arch;
 
-    _Bool is_entry = 1; // 1 = Entering syscall, 0 = Exiting
-    _Bool is_print = 0; // 0 = Waiting for execve, 1 = Printing enabled
+    _Bool is_entry = 1;
+    _Bool is_print = 0;
 
     // 1. Seize the process
     if (ptrace(PTRACE_SEIZE, strace->pid, 0, 0) == -1)
@@ -189,28 +199,24 @@ int trace_bin(t_strace *strace)
 
     ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD);
 
-
     while (42)
     {
-        // Pass 'sig' (if any) back to child
         if (ptrace(PTRACE_SYSCALL, strace->pid, 0, sig) < 0)
             break;
         
         if (waitpid(strace->pid, &status, 0) < 0)
             break;
 
-        // Reset injected signal immediately
         sig = 0;
 
-        // Check if child exited or was killed
+        // exited or was killed by signal
         if (WIFEXITED(status) || WIFSIGNALED(status))
             break;
 
-        // Check if stopped
+        // check if stopped
         if (WIFSTOPPED(status))
         {
-            // --- CASE 1: SYSCALL STOP ---
-            // (SIGTRAP | 0x80) indicates a syscall because of PTRACE_O_TRACESYSGOOD
+            // --- case 1: syscall stop ---
             if (WSTOPSIG(status) == (SIGTRAP | 0x80))
             {
                 iov.iov_base = &regs;
@@ -220,11 +226,11 @@ int trace_bin(t_strace *strace)
 
                 sys_arch = detect_sys_arch(&regs);
                 
-                // EXECVE FILTERING:
-                // Do not print anything until the first specific execve call
+                // execve filtering
                 if (!is_print)
                 {
                     unsigned long syscall_nr = regs.orig_rax;
+
                     // 59 = execve (x64), 11 = execve (i386)
                     if ((sys_arch == ARCH_X86_64 && syscall_nr == 59) || 
                         (sys_arch == ARCH_I386 && syscall_nr == 11))
@@ -233,7 +239,6 @@ int trace_bin(t_strace *strace)
                     }
                     else
                     {
-                        // Skip this stop, but flip state to keep sync
                         is_entry = !is_entry; 
                         continue;
                     }
@@ -242,13 +247,11 @@ int trace_bin(t_strace *strace)
                 handle_syscall(strace, &regs, sys_arch, is_entry);
                 is_entry = !is_entry;
             }
-            // --- CASE 2: GENUINE SIGNAL ---
-            // (SIGCHLD, SIGINT, SIGSEGV, etc.)
+            // --- case 2: others signal ---
             else
             {
                 ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si);
 
-                // Do not print internal SIGTRAP (caused by PTRACE_ATTACH, etc.)
                 if (si.si_signo != SIGTRAP)
                 {
                     if (is_print || si.si_signo != SIGSTOP)
@@ -260,7 +263,6 @@ int trace_bin(t_strace *strace)
                             fprintf(stderr, " ---\n");
                         }
                         
-                        // SAVE THE SIGNAL to pass it back in the next ptrace call
                         sig = si.si_signo;
                     }
                 }
@@ -268,7 +270,7 @@ int trace_bin(t_strace *strace)
         }
     }
 
-    // Handle final exit output
+    // final exit handling --
     if (!strace->args.sum_opt && !is_entry && is_print)
         fprintf(stderr, " = ?\n");
 
