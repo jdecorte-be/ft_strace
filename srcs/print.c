@@ -1,8 +1,6 @@
 #include "strace.h"
 #include "signals.h"
 
-/** SIG code mappings and print **/
-
 const char *sys_signame[] = SYS_SIGNAME;
 
 static const char *const sys_si_code[] = SI_CODE;
@@ -14,15 +12,7 @@ static const char *const trap_si_code[] = TRAP_SI_CODE;
 static const char *const cld_si_code[] = CLD_SI_CODE;
 static const char *const poll_si_code[] = POLL_SI_CODE;
 
-static const char *safe_code(
-    const char *const *tab, int code, size_t size)
-{
-    if (code >= 0 && (size_t)code < size && tab[code])
-        return tab[code];
-    return NULL;
-}
-
-typedef struct s_sigcode_map
+typedef struct
 {
     int signo;
     const char *const *codes;
@@ -30,113 +20,113 @@ typedef struct s_sigcode_map
 } t_sigcode_map;
 
 static const t_sigcode_map sigcode_maps[] = {
-    {SIGILL, ill_si_code, sizeof(ill_si_code) / sizeof(*ill_si_code)},
-    {SIGFPE, fpe_si_code, sizeof(fpe_si_code) / sizeof(*fpe_si_code)},
-    {SIGSEGV, segv_si_code, sizeof(segv_si_code) / sizeof(*segv_si_code)},
-    {SIGBUS, bus_si_code, sizeof(bus_si_code) / sizeof(*bus_si_code)},
-    {SIGTRAP, trap_si_code, sizeof(trap_si_code) / sizeof(*trap_si_code)},
-    {SIGCHLD, cld_si_code, sizeof(cld_si_code) / sizeof(*cld_si_code)},
-    {SIGPOLL, poll_si_code, sizeof(poll_si_code) / sizeof(*poll_si_code)},
+    {SIGILL, ill_si_code, sizeof(ill_si_code) / sizeof(char *)},
+    {SIGFPE, fpe_si_code, sizeof(fpe_si_code) / sizeof(char *)},
+    {SIGSEGV, segv_si_code, sizeof(segv_si_code) / sizeof(char *)},
+    {SIGBUS, bus_si_code, sizeof(bus_si_code) / sizeof(char *)},
+    {SIGTRAP, trap_si_code, sizeof(trap_si_code) / sizeof(char *)},
+    {SIGCHLD, cld_si_code, sizeof(cld_si_code) / sizeof(char *)},
+    {SIGPOLL, poll_si_code, sizeof(poll_si_code) / sizeof(char *)},
 };
 
+/**
+ * @brief Print siginfo_t structure details
+ * @param si
+ */
 void print_siginfo(siginfo_t *si)
 {
     const char *code = NULL;
 
-    /* Signal-specific si_code */
-    for (size_t i = 0; i < sizeof(sigcode_maps) / sizeof(*sigcode_maps); i++)
+    // specific signal codes
+    for (size_t i = 0; i < sizeof(sigcode_maps) / sizeof(t_sigcode_map); i++)
     {
         if (si->si_signo == sigcode_maps[i].signo)
         {
-            code = safe_code(
-                sigcode_maps[i].codes,
-                si->si_code,
-                sigcode_maps[i].size);
+            if (si->si_code >= 0 && (size_t)si->si_code < sigcode_maps[i].size)
+                code = sigcode_maps[i].codes[si->si_code];
             break;
         }
     }
 
-    /* Generic SI_* codes */
+    // generic codes
     if (!code)
     {
-        switch (si->si_code)
+        static const struct
         {
-        case SI_USER:
-            code = sys_si_code[1];
-            break;
-        case SI_KERNEL:
-            code = sys_si_code[2];
-            break;
-        case SI_QUEUE:
-            code = sys_si_code[3];
-            break;
-        case SI_TIMER:
-            code = sys_si_code[4];
-            break;
-        case SI_MESGQ:
-            code = sys_si_code[5];
-            break;
-        case SI_ASYNCIO:
-            code = sys_si_code[6];
-            break;
-        case SI_SIGIO:
-            code = sys_si_code[7];
-            break;
-        case SI_TKILL:
-            code = sys_si_code[8];
-            break;
-        default:
-            code = sys_si_code[0];
-            break;
+            int code;
+            int idx;
+        } generic_map[] = {
+            {SI_USER, 1}, {SI_KERNEL, 2}, {SI_QUEUE, 3}, {SI_TIMER, 4}, {SI_MESGQ, 5}, {SI_ASYNCIO, 6}, {SI_SIGIO, 7}, {SI_TKILL, 8}};
+        code = sys_si_code[0]; // Default
+        for (size_t i = 0; i < 8; i++)
+        {
+            if (si->si_code == generic_map[i].code)
+            {
+                code = sys_si_code[generic_map[i].idx];
+                break;
+            }
         }
     }
 
-    fprintf(stderr,
-            "{si_signo=%s, si_code=%s, si_addr=%p}",
-            sys_signame[si->si_signo],
-            code,
-            si->si_addr);
+    fprintf(stderr, "{si_signo=%s, si_code=%s, si_addr=%p}",
+            sys_signame[si->si_signo], code, si->si_addr);
 }
 
-/** print functions **/
-
+/**
+ * @brief Print a single character with escaping
+ * @param c
+ */
 void put_escaped_char(uint8_t c)
 {
-    if (c == '\n')
+    switch (c)
+    {
+    case '\n':
         fprintf(stderr, "\\n");
-    else if (c == '\t')
+        break;
+    case '\t':
         fprintf(stderr, "\\t");
-    else if (c == '\r')
+        break;
+    case '\r':
         fprintf(stderr, "\\r");
-    else if (c == '\"')
+        break;
+    case '\"':
         fprintf(stderr, "\\\"");
-    else if (c >= 32 && c <= 126)
-        fputc(c, stderr);
-    else
-        fprintf(stderr, "\\%03o", c); // Octal is standard for strace
+        break;
+    default:
+        if (c >= 32 && c <= 126)
+            fputc(c, stderr);
+        else
+            fprintf(stderr, "\\%03o", c);
+    }
 }
 
+/**
+ * @brief Print a NULL-terminated array of strings
+ * @param argv
+ */
 void print_argv(char **argv)
 {
     fprintf(stderr, "[");
     for (int i = 0; argv && argv[i]; i++)
-    {
-        fprintf(stderr, "%s\"%s\"", i > 0 ? ", " : "", argv[i]);
-    }
+        fprintf(stderr, "%s\"%s\"", i ? ", " : "", argv[i]);
     fprintf(stderr, "]");
 }
 
+/**
+ * @brief Print a string from the process memory
+ * @param pid
+ * @param addr
+ */
 void print_string(pid_t pid, void *addr)
 {
+    uint8_t buf[48];
+    struct iovec local = {buf, sizeof(buf)}, remote = {addr, sizeof(buf)};
+
     if (!addr)
     {
         fprintf(stderr, "NULL");
         return;
     }
-
-    uint8_t buf[48]; // Only read what we might actually print
-    struct iovec local = {.iov_base = buf, .iov_len = sizeof(buf)};
-    struct iovec remote = {.iov_base = addr, .iov_len = sizeof(buf)};
 
     ssize_t nread = process_vm_readv(pid, &local, 1, &remote, 1, 0);
     if (nread <= 0)
@@ -146,12 +136,10 @@ void print_string(pid_t pid, void *addr)
     }
 
     fprintf(stderr, "\"");
-    for (int i = 0; i < nread; i++)
+    for (int i = 0; i < nread && buf[i]; i++)
     {
-        if (buf[i] == '\0')
-            break;
         if (i == 32)
-        { // Truncate long strings like strace
+        {
             fprintf(stderr, "\"...");
             return;
         }
@@ -160,28 +148,37 @@ void print_string(pid_t pid, void *addr)
     fprintf(stderr, "\"");
 }
 
+/**
+ * @brief Print open flags in symbolic form
+ * @param flags
+ */
 void print_flag_open(int flags)
 {
-    struct
+    static const struct
     {
         int val;
         char *name;
-    } table[] = {
-        {O_APPEND, "O_APPEND"}, {O_ASYNC, "O_ASYNC"}, {O_CLOEXEC, "O_CLOEXEC"}, {O_CREAT, "O_CREAT"}, {O_DIRECT, "O_DIRECT"}, {O_DIRECTORY, "O_DIRECTORY"}, {O_EXCL, "O_EXCL"}, {O_NOATIME, "O_NOATIME"}, {O_NOFOLLOW, "O_NOFOLLOW"}, {O_NONBLOCK, "O_NONBLOCK"}, {O_TRUNC, "O_TRUNC"}, {0, NULL}};
+    } flags_map[] = {
+        {O_APPEND, "O_APPEND"}, {O_ASYNC, "O_ASYNC"}, {O_CLOEXEC, "O_CLOEXEC"}, \
+        {O_CREAT, "O_CREAT"}, {O_DIRECT, "O_DIRECT"}, {O_DIRECTORY, "O_DIRECTORY"}, \
+        {O_EXCL, "O_EXCL"}, {O_NOATIME, "O_NOATIME"}, {O_NOFOLLOW, "O_NOFOLLOW"}, \
+        {O_NONBLOCK, "O_NONBLOCK"}, {O_TRUNC, "O_TRUNC"}, {0, NULL}};
 
-    // Handle Access Mode (First 2 bits usually)
     int acc = flags & O_ACCMODE;
     fprintf(stderr, acc == O_RDONLY ? "O_RDONLY" : acc == O_WRONLY ? "O_WRONLY"
                                                                    : "O_RDWR");
 
-    // Handle Bit Flags
-    for (int i = 0; table[i].name; i++)
-    {
-        if (flags & table[i].val)
-            fprintf(stderr, "|%s", table[i].name);
-    }
+    for (int i = 0; flags_map[i].name; i++)
+        if (flags & flags_map[i].val)
+            fprintf(stderr, "|%s", flags_map[i].name);
 }
 
+/**
+ * @brief Print a system call and its arguments
+ * @param strace
+ * @param sc
+ * @param argc
+ */
 void print_syscall(t_strace *strace, syscall_t sc, int argc, ...)
 {
     va_list ap;
@@ -192,8 +189,8 @@ void print_syscall(t_strace *strace, syscall_t sc, int argc, ...)
     {
         if (i > 0)
             fprintf(stderr, ", ");
+        long arg = va_arg(ap, long);
 
-        long arg = va_arg(ap, long); // Get raw value, cast based on type
         switch (sc.type_args[i])
         {
         case INT:
@@ -203,7 +200,7 @@ void print_syscall(t_strace *strace, syscall_t sc, int argc, ...)
             fprintf(stderr, "%lu", (unsigned long)arg);
             break;
         case PTR:
-            arg ? fprintf(stderr, "%p", (void *)arg) : fprintf(stderr, "NULL");
+            fprintf(stderr, arg ? "%p" : "NULL", (void *)arg);
             break;
         case STR:
             print_string(strace->pid, (void *)arg);
