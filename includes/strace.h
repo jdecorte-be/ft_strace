@@ -59,6 +59,8 @@ typedef struct s_strace
     t_stats stats_32[MAX_I386_SYSCALL];
     struct timespec start_ts;
 
+    char execve_buffer[BUFFER_SIZE];
+
     pid_t pid;
     size_t n_env;
 } t_strace;

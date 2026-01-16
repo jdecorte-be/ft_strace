@@ -194,7 +194,7 @@ int trace_bin(t_strace *strace)
     t_sys_arch sys_arch;
 
     _Bool is_entry = 1;
-    _Bool is_print = 0;
+    _Bool is_started = 0;
 
     // 1. Seize the process
     if (ptrace(PTRACE_SEIZE, strace->pid, 0, 0) == -1)
@@ -218,73 +218,78 @@ int trace_bin(t_strace *strace)
 
         sig = 0;
 
-        // exited or was killed by signal
-        if (WIFEXITED(status) || WIFSIGNALED(status))
-            break;
+        if (WIFSTOPPED(status) && WSTOPSIG(status) != (SIGTRAP | 0x80))
+        {
+            ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si);
+            if (si.si_signo != SIGTRAP)
+            {
+                if (is_started && !strace->args.sum_opt)
+                {
+                    fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
+                    print_siginfo(&si);
+                    fprintf(stderr, " ---\n");
+                }
+                sig = si.si_signo;
+            }
+            continue;
+        }
 
-        // check if stopped
         if (WIFSTOPPED(status))
         {
-            // --- case 1: syscall stop ---
-            if (WSTOPSIG(status) == (SIGTRAP | 0x80))
+            iov.iov_base = &regs;
+            iov.iov_len = sizeof(regs);
+            ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov);
+
+            sys_arch = detect_sys_arch(&iov);
+            
+            // execve filtering
+            if (!is_started)
             {
-                iov.iov_base = &regs;
-                iov.iov_len = sizeof(regs);
-                if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) == -1)
-                    break;
+                unsigned long syscall_nr = (sys_arch == ARCH_X86_64) ? regs.x86_64_r.orig_rax : regs.i386_r.orig_eax;
 
-                sys_arch = detect_sys_arch(&iov);
-                
-                // execve filtering
-                if (!is_print)
+                // 59 = execve (x64), 11 = execve (i386)
+                if ((sys_arch == ARCH_X86_64 && syscall_nr == 59) || 
+                    (sys_arch == ARCH_I386 && syscall_nr == 11))
                 {
-                    unsigned long syscall_nr = (sys_arch == ARCH_X86_64) ? regs.x86_64_r.orig_rax : regs.i386_r.orig_eax;
-
-                    // 59 = execve (x64), 11 = execve (i386)
-                    if ((sys_arch == ARCH_X86_64 && syscall_nr == 59) || 
-                        (sys_arch == ARCH_I386 && syscall_nr == 11))
+                    if (is_entry)
                     {
-                        is_print = 1;
+                        snprintf(strace->execve_buffer, sizeof(strace->execve_buffer), 
+                        "execve(\"%s\", [/* arguments */], [/* %ld vars */])", 
+                        "NULL", strace->n_env);
                     }
                     else
                     {
-                        is_entry = !is_entry; 
-                        continue;
+                        long ret = (sys_arch == ARCH_X86_64) ? (long)regs.x86_64_r.rax : (long)regs.i386_r.eax;
+                        if (ret == 0)
+                        {
+                            is_started = 1;
+                            if (!strace->args.sum_opt)
+                                fprintf(stderr, "%s = 0\n", strace->execve_buffer);
+                        }
                     }
                 }
-                
+                else
+                {
+                    is_entry = !is_entry; 
+                    continue;
+                }
+            }
+            else
+            {
                 if (sys_arch == ARCH_X86_64)
                     handle_x86_64_syscall(strace, &regs.x86_64_r, is_entry);
                 else if (sys_arch == ARCH_I386)
                     handle_i386_syscall(strace, &regs.i386_r, is_entry);
-
-                is_entry = !is_entry;
             }
-            // --- case 2: others signal ---
-            else
-            {
-                ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si);
+            
 
-                if (si.si_signo != SIGTRAP)
-                {
-                    if (is_print || si.si_signo != SIGSTOP)
-                    {
-                        if (!strace->args.sum_opt)
-                        {
-                            fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
-                            print_siginfo(&si);
-                            fprintf(stderr, " ---\n");
-                        }
-                        
-                        sig = si.si_signo;
-                    }
-                }
-            }
+            is_entry = !is_entry;
+ 
         }
     }
 
     // final exit handling --
-    if (!strace->args.sum_opt && !is_entry && is_print)
+    if (!strace->args.sum_opt && !is_entry && is_started)
         fprintf(stderr, " = ?\n");
 
     if (strace->args.sum_opt)
