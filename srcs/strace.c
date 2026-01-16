@@ -12,14 +12,14 @@ extern const char		*sys_signame[];
  * @param regs
  * @return t_sys_arch
  */
-t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
+t_sys_arch detect_sys_arch(struct iovec *iov)
 {
-    if (regs->cs == 0x33)
+    if (sizeof(struct user_regs_struct) == iov->iov_len)
         return ARCH_X86_64;
-    else if (regs->cs == 0x23)
+    else if (sizeof(struct i386_user_regs_struct) == iov->iov_len)
         return ARCH_I386;
     else
-        return ARCH_UNKNOWN;
+        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 }
 
 /**
@@ -56,6 +56,40 @@ void block_signals(pid_t pid)
 	sigprocmask(SIG_BLOCK, &set, NULL);
 }
 
+static void update_summary(t_strace *strace, struct user_regs_struct *regs, const syscall_t *table, unsigned long syscall_num, t_sys_arch arch, _Bool is_entry)
+{
+    t_stats *stats = (arch == ARCH_X86_64) ? &strace->stats_64[syscall_num] : &strace->stats_32[syscall_num];
+    
+    if (is_entry)
+    {
+        get_time(strace->pid, &strace->start_ts);
+        stats->calls++;
+        stats->name = table[syscall_num].name;
+    }
+    else
+    {
+        struct timespec end_ts, diff;
+        get_time(strace->pid, &end_ts);
+        
+        diff.tv_sec = end_ts.tv_sec - strace->start_ts.tv_sec;
+        diff.tv_nsec = end_ts.tv_nsec - strace->start_ts.tv_nsec;
+        if (diff.tv_nsec < 0) {
+            diff.tv_sec--;
+            diff.tv_nsec += 1000000000;
+        }
+        
+        stats->total_time.tv_sec += diff.tv_sec;
+        stats->total_time.tv_nsec += diff.tv_nsec;
+        if (stats->total_time.tv_nsec >= 1000000000) {
+            stats->total_time.tv_sec++;
+            stats->total_time.tv_nsec -= 1000000000;
+        }
+
+        long long ret = (long long)regs->rax;
+        if (ret > -4096 && ret < 0)
+            stats->errors++;
+    }
+}
 
 /**
  * @brief Handle system call entry and exit events
@@ -92,45 +126,13 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         args[0] = (uint32_t)regs->rbx; args[1] = (uint32_t)regs->rcx; args[2] = (uint32_t)regs->rdx;
         args[3] = (uint32_t)regs->rsi; args[4] = (uint32_t)regs->rdi; args[5] = (uint32_t)regs->rbp;
     }
-    else
-        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 
     if (syscall_num >= max_syscall)
         return; 
 
     if (strace->args.sum_opt)
     {
-        t_stats *stats = (arch == ARCH_X86_64) ? &strace->stats_64[syscall_num] : &strace->stats_32[syscall_num];
-        
-        if (is_entry)
-        {
-            get_time(strace->pid, &strace->start_ts);
-            stats->calls++;
-            stats->name = table[syscall_num].name;
-        }
-        else
-        {
-            struct timespec end_ts, diff;
-            get_time(strace->pid, &end_ts);
-            
-            diff.tv_sec = end_ts.tv_sec - strace->start_ts.tv_sec;
-            diff.tv_nsec = end_ts.tv_nsec - strace->start_ts.tv_nsec;
-            if (diff.tv_nsec < 0) {
-                diff.tv_sec--;
-                diff.tv_nsec += 1000000000;
-            }
-            
-            stats->total_time.tv_sec += diff.tv_sec;
-            stats->total_time.tv_nsec += diff.tv_nsec;
-            if (stats->total_time.tv_nsec >= 1000000000) {
-                stats->total_time.tv_sec++;
-                stats->total_time.tv_nsec -= 1000000000;
-            }
-
-            long long ret = (long long)regs->rax;
-            if (ret > -4096 && ret < 0)
-                stats->errors++;
-        }
+        update_summary(strace, regs, table, syscall_num, arch, is_entry);
         return;
     }
 
@@ -224,7 +226,7 @@ int trace_bin(t_strace *strace)
                 if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) == -1)
                     break;
 
-                sys_arch = detect_sys_arch(&regs);
+                sys_arch = detect_sys_arch(&iov);
                 
                 // execve filtering
                 if (!is_print)
