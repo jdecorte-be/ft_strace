@@ -72,7 +72,7 @@ typedef struct syscall_s
 
 } syscall_t;
 
-struct i386_user_regs_struct {
+typedef struct i386_user_regs_struct {
 	int		ebx;
 	int		ecx;
 	int		edx;
@@ -90,7 +90,7 @@ struct i386_user_regs_struct {
 	int		eflags;
 	int		esp;
 	int		xss;
-};
+} i386_user_regs_struct_t;
 
 void print_summary(t_strace *strace);
 void print_syscall(t_strace *strace, syscall_t syscall, int argc, ...);

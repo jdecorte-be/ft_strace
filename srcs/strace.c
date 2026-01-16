@@ -56,10 +56,11 @@ void block_signals(pid_t pid)
 	sigprocmask(SIG_BLOCK, &set, NULL);
 }
 
-static void update_summary(t_strace *strace, struct user_regs_struct *regs, const syscall_t *table, unsigned long syscall_num, t_sys_arch arch, _Bool is_entry)
+static void update_summary(t_strace *strace, void *regs, const syscall_t *table, unsigned long syscall_num, t_sys_arch arch, _Bool is_entry)
 {
     t_stats *stats = (arch == ARCH_X86_64) ? &strace->stats_64[syscall_num] : &strace->stats_32[syscall_num];
-    
+    long long ret;
+
     if (is_entry)
     {
         get_time(strace->pid, &strace->start_ts);
@@ -85,9 +86,91 @@ static void update_summary(t_strace *strace, struct user_regs_struct *regs, cons
             stats->total_time.tv_nsec -= 1000000000;
         }
 
-        long long ret = (long long)regs->rax;
+        if (arch == ARCH_X86_64)
+            ret = (long long)((struct user_regs_struct *)regs)->rax;
+        else
+            ret = (long long)((struct i386_user_regs_struct *)regs)->eax;
+
         if (ret > -4096 && ret < 0)
             stats->errors++;
+    }
+}
+
+static void handle_x86_64_syscall(t_strace *strace, struct user_regs_struct *regs, _Bool is_entry)
+{
+    const syscall_t *table = x86_64_syscall;
+    unsigned long syscall_num = regs->orig_rax;
+    unsigned long args[6];
+    
+    args[0] = regs->rdi; args[1] = regs->rsi; args[2] = regs->rdx;
+    args[3] = regs->r10; args[4] = regs->r8;  args[5] = regs->r9;
+
+    if (syscall_num >= MAX_X86_64_SYSCALL)
+        return;
+
+    if (strace->args.sum_opt)
+    {
+        update_summary(strace, regs, table, syscall_num, ARCH_X86_64, is_entry);
+        return;
+    }
+
+    if (is_entry)
+    {
+        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
+                      args[0], args[1], args[2], args[3], args[4], args[5]);
+    }
+    else
+    {
+        long long ret = (long long)regs->rax;
+
+        if (ret > -4096 && ret < 0)
+            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
+        else
+        {
+            if (table[syscall_num].type_ret == INT)
+                fprintf(stderr, " = %d\n", (int)regs->rax);
+            else
+                fprintf(stderr, " = %#lx\n", regs->rax);
+        }
+    }
+}
+
+static void handle_i386_syscall(t_strace *strace, struct i386_user_regs_struct *regs, _Bool is_entry)
+{
+    const syscall_t *table = i386_syscall;
+    unsigned long syscall_num = regs->orig_eax;
+    unsigned long args[6];
+    
+    args[0] = (uint32_t)regs->ebx; args[1] = (uint32_t)regs->ecx; args[2] = (uint32_t)regs->edx;
+    args[3] = (uint32_t)regs->esi; args[4] = (uint32_t)regs->edi; args[5] = (uint32_t)regs->ebp;
+
+    if (syscall_num >= MAX_I386_SYSCALL)
+        return;
+
+    if (strace->args.sum_opt)
+    {
+        update_summary(strace, regs, table, syscall_num, ARCH_I386, is_entry);
+        return;
+    }
+
+    if (is_entry)
+    {
+        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
+                      args[0], args[1], args[2], args[3], args[4], args[5]);
+    }
+    else
+    {
+        long long ret = (long long)regs->eax;
+
+        if (ret > -4096 && ret < 0)
+            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
+        else
+        {
+            if (table[syscall_num].type_ret == INT)
+                fprintf(stderr, " = %d\n", (int)regs->eax);
+            else
+                fprintf(stderr, " = %#x\n", (unsigned int)regs->eax);
+        }
     }
 }
 
@@ -103,71 +186,14 @@ static void update_summary(t_strace *strace, struct user_regs_struct *regs, cons
  * @param arch
  * @param is_entry
  */
-void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch arch, _Bool is_entry)
+void handle_syscall(t_strace *strace, void *regs, t_sys_arch arch, _Bool is_entry)
 {
-    const syscall_t *table;
-    unsigned long syscall_num = regs->orig_rax;
-    unsigned long max_syscall;
-    unsigned long args[6];
-    
     if (arch == ARCH_X86_64)
-    {
-        table = x86_64_syscall;
-        max_syscall = MAX_X86_64_SYSCALL;
-        
-        args[0] = regs->rdi; args[1] = regs->rsi; args[2] = regs->rdx;
-        args[3] = regs->r10; args[4] = regs->r8;  args[5] = regs->r9;
-    }
+        handle_x86_64_syscall(strace, (struct user_regs_struct *)regs, is_entry);
     else if (arch == ARCH_I386)
-    {
-        table = i386_syscall;
-        max_syscall = MAX_I386_SYSCALL;
-        
-        args[0] = (uint32_t)regs->rbx; args[1] = (uint32_t)regs->rcx; args[2] = (uint32_t)regs->rdx;
-        args[3] = (uint32_t)regs->rsi; args[4] = (uint32_t)regs->rdi; args[5] = (uint32_t)regs->rbp;
-    }
-
-    if (syscall_num >= max_syscall)
-        return; 
-
-    if (strace->args.sum_opt)
-    {
-        update_summary(strace, regs, table, syscall_num, arch, is_entry);
-        return;
-    }
-
-    if (is_entry)
-    {
-        // --- SYSCALL ENTRY ---
-        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
-                      args[0], args[1], args[2], args[3], args[4], args[5]);
-    }
+        handle_i386_syscall(strace, (struct i386_user_regs_struct *)regs, is_entry);
     else
-    {
-        // --- SYSCALL EXIT ---
-        long long ret = (long long)regs->rax;
-
-        // linux kernel errors are -1 to -4095
-        if (ret > -4096 && ret < 0)
-            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
-        else
-        {
-            if (table[syscall_num].type_ret == INT)
-            {
-                if (arch == ARCH_I386)
-                    fprintf(stderr, " = %d\n", (int)regs->rax);
-                else
-                    fprintf(stderr, " = %d\n", (int)regs->rax);
-            }
-            else
-            {
-                if (arch == ARCH_I386)
-                    fprintf(stderr, " = %#x\n", (unsigned int)regs->rax);
-                else
-                    fprintf(stderr, " = %#lx\n", regs->rax);
-            }
-        }
-    }
+        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 }
 
 
@@ -179,9 +205,13 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
  */
 int trace_bin(t_strace *strace)
 {
+	union {
+		struct user_regs_struct x86_64_r;
+		struct i386_user_regs_struct i386_r;
+	}	regs;
+
     int status;
     int sig = 0;
-    struct user_regs_struct regs;
     struct iovec iov;
     siginfo_t si;
     t_sys_arch sys_arch;
@@ -231,7 +261,7 @@ int trace_bin(t_strace *strace)
                 // execve filtering
                 if (!is_print)
                 {
-                    unsigned long syscall_nr = regs.orig_rax;
+                    unsigned long syscall_nr = (sys_arch == ARCH_X86_64) ? regs.x86_64_r.orig_rax : regs.i386_r.orig_eax;
 
                     // 59 = execve (x64), 11 = execve (i386)
                     if ((sys_arch == ARCH_X86_64 && syscall_nr == 59) || 
