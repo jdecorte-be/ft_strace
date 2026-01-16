@@ -175,29 +175,6 @@ static void handle_i386_syscall(t_strace *strace, struct i386_user_regs_struct *
 }
 
 /**
- * @brief Handle system call entry and exit events
- *
- * Dispatches logic based on architecture, maps registers to arguments,
- * updates statistics if summary mode is active, or prints formatted
- * syscall arguments and return values to stderr.
- *
- * @param strace
- * @param regs
- * @param arch
- * @param is_entry
- */
-void handle_syscall(t_strace *strace, void *regs, t_sys_arch arch, _Bool is_entry)
-{
-    if (arch == ARCH_X86_64)
-        handle_x86_64_syscall(strace, (struct user_regs_struct *)regs, is_entry);
-    else if (arch == ARCH_I386)
-        handle_i386_syscall(strace, (struct i386_user_regs_struct *)regs, is_entry);
-    else
-        error(EXIT_FAILURE, 0, "Unknown architecture detected");
-}
-
-
-/**
  * @brief Main tracing loop responsible for attaching and monitoring the process
  *
  * @param strace
@@ -275,8 +252,12 @@ int trace_bin(t_strace *strace)
                         continue;
                     }
                 }
+                
+                if (sys_arch == ARCH_X86_64)
+                    handle_x86_64_syscall(strace, &regs.x86_64_r, is_entry);
+                else if (sys_arch == ARCH_I386)
+                    handle_i386_syscall(strace, &regs.i386_r, is_entry);
 
-                handle_syscall(strace, &regs, sys_arch, is_entry);
                 is_entry = !is_entry;
             }
             // --- case 2: others signal ---
