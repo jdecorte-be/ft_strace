@@ -98,79 +98,42 @@ static void update_summary(t_strace *strace, void *regs, const syscall_t *table,
 
 static void handle_x86_64_syscall(t_strace *strace, struct user_regs_struct *regs, _Bool is_entry)
 {
-    const syscall_t *table = x86_64_syscall;
-    unsigned long syscall_num = regs->orig_rax;
-    unsigned long args[6];
-    
-    args[0] = regs->rdi; args[1] = regs->rsi; args[2] = regs->rdx;
-    args[3] = regs->r10; args[4] = regs->r8;  args[5] = regs->r9;
-
-    if (syscall_num >= MAX_X86_64_SYSCALL)
-        return;
-
     if (strace->args.sum_opt)
-    {
-        update_summary(strace, regs, table, syscall_num, ARCH_X86_64, is_entry);
-        return;
-    }
+        return update_summary(strace, regs, x86_64_syscall, regs->orig_rax, ARCH_X86_64, is_entry);
 
-    if (is_entry)
+    if (regs->rax == -ENOSYS && regs->orig_rax < MAX_X86_64_SYSCALL)
     {
-        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
-                      args[0], args[1], args[2], args[3], args[4], args[5]);
+        print_syscall(strace, x86_64_syscall[regs->orig_rax], x86_64_syscall[regs->orig_rax].argc,
+                      (uint32_t)regs->rdi, (uint32_t)regs->rsi, (uint32_t)regs->rdx,
+                      (uint32_t)regs->r10, (uint32_t)regs->r8, (uint32_t)regs->r9);
     }
     else
     {
-        long long ret = (long long)regs->rax;
-
-        if (ret > -4096 && ret < 0)
-            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
+        if (x86_64_syscall[regs->orig_rax].type_ret == INT)
+            fprintf(stderr, " = %d\n", (int)regs->rax);
         else
-        {
-            if (table[syscall_num].type_ret == INT)
-                fprintf(stderr, " = %d\n", (int)regs->rax);
-            else
-                fprintf(stderr, " = %#lx\n", regs->rax);
-        }
+            fprintf(stderr, " = %#lx\n", regs->rax);
     }
+
 }
 
 static void handle_i386_syscall(t_strace *strace, struct i386_user_regs_struct *regs, _Bool is_entry)
 {
-    const syscall_t *table = i386_syscall;
-    unsigned long syscall_num = regs->orig_eax;
-    unsigned long args[6];
-    
-    args[0] = (uint32_t)regs->ebx; args[1] = (uint32_t)regs->ecx; args[2] = (uint32_t)regs->edx;
-    args[3] = (uint32_t)regs->esi; args[4] = (uint32_t)regs->edi; args[5] = (uint32_t)regs->ebp;
-
-    if (syscall_num >= MAX_I386_SYSCALL)
-        return;
-
     if (strace->args.sum_opt)
-    {
-        update_summary(strace, regs, table, syscall_num, ARCH_I386, is_entry);
-        return;
-    }
+        return update_summary(strace, regs, i386_syscall, regs->orig_eax, ARCH_I386, is_entry);
 
-    if (is_entry)
+    if (regs->eax == -ENOSYS && regs->orig_eax < MAX_I386_SYSCALL)
     {
-        print_syscall(strace, table[syscall_num], table[syscall_num].argc,
-                      args[0], args[1], args[2], args[3], args[4], args[5]);
+        print_syscall(strace, i386_syscall[regs->orig_eax], i386_syscall[regs->orig_eax].argc,
+                      (uint32_t)regs->ebx, (uint32_t)regs->ecx, (uint32_t)regs->edx,
+                      (uint32_t)regs->esi, (uint32_t)regs->edi, (uint32_t)regs->ebp);
     }
     else
     {
-        long long ret = (long long)regs->eax;
-
-        if (ret > -4096 && ret < 0)
-            fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
+        if (i386_syscall[regs->orig_eax].type_ret == INT)
+            fprintf(stderr, " = %d\n", (int)regs->eax);
         else
-        {
-            if (table[syscall_num].type_ret == INT)
-                fprintf(stderr, " = %d\n", (int)regs->eax);
-            else
-                fprintf(stderr, " = %#x\n", (unsigned int)regs->eax);
-        }
+            fprintf(stderr, " = %#x\n", regs->eax);
     }
 }
 
