@@ -175,25 +175,36 @@ int trace_bin(t_strace *strace)
     {
         if (ptrace(PTRACE_SYSCALL, strace->pid, 0, sig) < 0)
             break;
+
+        sig = 0;
         
         if (waitpid(strace->pid, &status, 0) < 0)
             break;
 
-        sig = 0;
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
 
         if (WIFSTOPPED(status) && WSTOPSIG(status) != (SIGTRAP | 0x80))
         {
+            sig = WSTOPSIG(status);
+
+            if (sig == SIGINT) 
+                return EXIT_SUCCESS;
+
             ptrace(PTRACE_GETSIGINFO, strace->pid, 0, &si);
-            if (si.si_signo != SIGTRAP)
+
+            if (sig != SIGTRAP && sig != SIGSTOP)
             {
                 if (is_started && !strace->args.sum_opt)
                 {
-                    fprintf(stderr, "--- %s ", sys_signame[si.si_signo]);
+                    fprintf(stderr, "--- %s ", sys_signame[sig]);
                     print_siginfo(&si);
                     fprintf(stderr, " ---\n");
                 }
-                sig = si.si_signo;
             }
+            else
+                sig = 0;
+
             continue;
         }
 
@@ -201,7 +212,9 @@ int trace_bin(t_strace *strace)
         {
             iov.iov_base = &regs;
             iov.iov_len = sizeof(regs);
-            ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov);
+
+            if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) < 0)
+                break;
 
             sys_arch = detect_sys_arch(&iov);
             
@@ -216,6 +229,9 @@ int trace_bin(t_strace *strace)
                 {
                     if (is_entry)
                     {
+                        if (strace->args.sum_opt)
+                            update_summary(strace, &regs, (sys_arch == ARCH_X86_64) ? x86_64_syscall : i386_syscall, syscall_nr, sys_arch, is_entry);
+
                         snprintf(strace->execve_buffer, sizeof(strace->execve_buffer), 
                         "execve(\"%s\", [/* arguments */], [/* %ld vars */])", 
                         "NULL", strace->n_env);
@@ -254,7 +270,6 @@ int trace_bin(t_strace *strace)
     if (!is_started)
         return EXIT_FAILURE;
 
-    // final exit handling --
     if (!strace->args.sum_opt && !is_entry)
         fprintf(stderr, " = ?\n");
 
