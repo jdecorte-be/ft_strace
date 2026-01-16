@@ -44,6 +44,11 @@ int main(int ac, char **av, char **env)
     av += index;
 
     strace.args.target = av;
+    // stat binary is exist
+    struct stat sb;
+    if (stat(av[0], &sb) == -1)
+        error(EXIT_FAILURE, 0, "Can't stat %s: No such file or directory", av[0]);
+
     while (env[strace.n_env])
         strace.n_env++;
 
@@ -51,7 +56,7 @@ int main(int ac, char **av, char **env)
     if(strace.pid == 0)
     {
         raise(SIGSTOP);
-        exec_with_path(av, env);
+        execvp(av[0], av);
         perror("exec");
         exit(EXIT_FAILURE);
     }

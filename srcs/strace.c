@@ -288,8 +288,11 @@ int trace_bin(t_strace *strace)
         }
     }
 
+    if (!is_started)
+        return EXIT_FAILURE;
+
     // final exit handling --
-    if (!strace->args.sum_opt && !is_entry && is_started)
+    if (!strace->args.sum_opt && !is_entry)
         fprintf(stderr, " = ?\n");
 
     if (strace->args.sum_opt)
