@@ -12,14 +12,14 @@ extern const char		*sys_signame[];
  * @param regs
  * @return t_sys_arch
  */
-t_sys_arch detect_sys_arch(struct user_regs_struct *regs)
+t_sys_arch detect_sys_arch(struct iovec *iov)
 {
-    if (regs->cs == 0x33)
+    if (iov->iov_len == sizeof(struct user_regs_struct))
         return ARCH_X86_64;
-    else if (regs->cs == 0x23)
+    else if (iov->iov_len == sizeof(struct i386_user_regs_struct))
         return ARCH_I386;
     else
-        return ARCH_UNKNOWN;
+        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 }
 
 /**
@@ -92,8 +92,6 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         args[0] = (uint32_t)regs->rbx; args[1] = (uint32_t)regs->rcx; args[2] = (uint32_t)regs->rdx;
         args[3] = (uint32_t)regs->rsi; args[4] = (uint32_t)regs->rdi; args[5] = (uint32_t)regs->rbp;
     }
-    else
-        error(EXIT_FAILURE, 0, "Unknown architecture detected");
 
     if (syscall_num >= max_syscall)
         return; 
@@ -145,7 +143,6 @@ void handle_syscall(t_strace *strace, struct user_regs_struct *regs, t_sys_arch 
         // --- SYSCALL EXIT ---
         long long ret = (long long)regs->rax;
 
-        // linux kernel errors are -1 to -4095
         if (ret > -4096 && ret < 0)
             fprintf(stderr, " = -1 E%lld (%s)\n", -ret, strerror(-ret));
         else
@@ -197,7 +194,7 @@ int trace_bin(t_strace *strace)
 
     block_signals(strace->pid);
 
-    ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD);
+    ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC);
 
     while (42)
     {
@@ -224,7 +221,7 @@ int trace_bin(t_strace *strace)
                 if (ptrace(PTRACE_GETREGSET, strace->pid, NT_PRSTATUS, &iov) == -1)
                     break;
 
-                sys_arch = detect_sys_arch(&regs);
+                sys_arch = detect_sys_arch(&iov);
                 
                 // execve filtering
                 if (!is_print)

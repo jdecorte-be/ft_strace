@@ -72,10 +72,31 @@ typedef struct syscall_s
 
 } syscall_t;
 
+struct i386_user_regs_struct {
+	int		ebx;
+	int		ecx;
+	int		edx;
+	int		esi;
+	int		edi;
+	int		ebp;
+	int		eax;
+	int		xds;
+	int		xes;
+	int		xfs;
+	int		xgs;
+	int		orig_eax;
+	int		eip;
+	int		xcs;
+	int		eflags;
+	int		esp;
+	int		xss;
+};
+
 void print_summary(t_strace *strace);
 void print_syscall(t_strace *strace, syscall_t syscall, int argc, ...);
 int trace_bin(t_strace *strace);
 void print_siginfo(siginfo_t *si);
 void exec_with_path(char **av, char **env);
+
 
 #endif
