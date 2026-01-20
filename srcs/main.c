@@ -49,12 +49,18 @@ int main(int ac, char **av, char **env)
         strace.n_env++;
 
     strace.pid = fork();
+    if (strace.pid < 0)
+    {
+        perror("vfork");
+        return EXIT_FAILURE;
+    }
+
     if(strace.pid == 0)
     {
         raise(SIGSTOP);
-        execvp(av[0], av);
+        // execvp(av[0], av);
+        execlp(av[0], av[0], NULL);
         perror("exec");
-        exit(EXIT_FAILURE);
     }
 
     return trace_bin(&strace);
