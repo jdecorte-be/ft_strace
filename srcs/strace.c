@@ -196,7 +196,6 @@ void print_stopped(t_strace *strace, int sig, siginfo_t *si)
  */
 int trace_bin(t_strace *strace)
 {
-    // ... (variable declarations remain the same) ...
     union
     {
         struct user_regs_struct x86_64_r;
@@ -217,7 +216,7 @@ int trace_bin(t_strace *strace)
 
     block_signals(strace->pid);
     setup_signals();
-    
+
     ptrace(PTRACE_SETOPTIONS, strace->pid, 0, PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT);
     while (42)
     {
