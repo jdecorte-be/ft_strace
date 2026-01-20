@@ -73,13 +73,9 @@ void setup_signals(void)
 {
     sigset_t set;
 
-    // 1. Clear the signal mask (Unblock everything)
     sigemptyset(&set);
     sigprocmask(SIG_SETMASK, &set, NULL);
 
-    // 2. Install handlers
-    // Note: We use sa_flags = 0 to ensure waitpid gets interrupted (EINTR)
-    // instead of restarting automatically.
     struct sigaction sa = {.sa_handler = interrupt, .sa_flags = 0};
     sigemptyset(&sa.sa_mask);
 
